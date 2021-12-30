@@ -1,16 +1,29 @@
 {
-  "name": "dnacms",
+  "name": "dna-cms",
   "version": "1.0.0",
-  "description": "Wordpress like CMS powered by nodeJS",
+  "description": "Wordpress like CMS powered by Node.js",
   "main": "index.js",
   "scripts": {
-    "start": "tsc && node build/index.js"
+    "lint": "eslint --cache src --ext .ts",
+    "build": "tsc",
+    "start": "node build/index",
+    "clean": "rm -rf build",
+    "distclean": "yarn run clean && rm -rf .eslintcache"
   },
   "repository": "https://github.com/DNA-CMS/DNACMS",
   "author": "DNA CMS <info@dnacms.org>",
   "license": "GPL-3.0",
   "private": false,
   "dependencies": {
-    "typescript": "^4.5.4"
+    "dna-eslint": "^0.0.2",
+    "reflect-metadata": "^0.1.13"
+  },
+  "devDependencies": {
+    "typescript": "^4.5.4",
+    "eslint": "^8.5.0",
+    "@typescript-eslint/parser": "^5.8.1",
+    "@typescript-eslint/eslint-plugin": "^5.8.1",
+    "eslint-plugin-import": "^2.25.3",
+    "prettier": "^2.5.1"
   }
 }
