@@ -16,14 +16,15 @@
   "private": false,
   "dependencies": {
     "dna-eslint": "^0.0.2",
-    "reflect-metadata": "^0.1.13"
+    "reflect-metadata": "^0.1.13",
+    "typegoose": "^5.9.1"
   },
   "devDependencies": {
-    "typescript": "^4.5.4",
-    "eslint": "^8.5.0",
-    "@typescript-eslint/parser": "^5.8.1",
     "@typescript-eslint/eslint-plugin": "^5.8.1",
+    "@typescript-eslint/parser": "^5.8.1",
+    "eslint": "^8.5.0",
     "eslint-plugin-import": "^2.25.3",
-    "prettier": "^2.5.1"
+    "prettier": "^2.5.1",
+    "typescript": "^4.5.4"
   }
 }
