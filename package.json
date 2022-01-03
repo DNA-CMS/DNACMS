@@ -15,9 +15,11 @@
   "license": "GPL-3.0",
   "private": false,
   "dependencies": {
+    "@typegoose/typegoose": "^9.4.0",
+    "@types/mongoose": "^5.11.97",
     "dna-eslint": "^0.0.2",
-    "reflect-metadata": "^0.1.13",
-    "typegoose": "^5.9.1"
+    "mongoose": "^6.1.4",
+    "reflect-metadata": "^0.1.13"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^5.8.1",
