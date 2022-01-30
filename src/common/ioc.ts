@@ -1,6 +1,7 @@
 import deepmerge from 'deepmerge';
 import { Container } from 'inversify';
 import { IOCConfig, IOCConfigSymbol } from './ioc_types';
+import { Logger } from './logger';
 
 export async function loadClass(
   moduleFile: string,
@@ -50,26 +51,32 @@ function arrayMerge(target: any[], source: any[]): any[] {
 async function getConfig(debug?: boolean): Promise<IOCConfig> {
   const configs = [
     await loadClass('./ioc_base_config', { debug }),
-    await loadClass('../../config/default', { debug })
+    await loadClass('../config/default', { debug })
   ];
-  const customConfigPath = `../../config/${process.env.NODE_ENV || 'development'}`;
+  const customConfigPath = `../config/${process.env.NODE_ENV || 'development'}`;
   const customConfig = await loadClass(customConfigPath, { debug, noThrow: true });
   if (customConfig) {
     configs.push(customConfig);
   }
   return deepmerge.all(configs, {
     arrayMerge
-  }) as any;
+  }) as IOCConfig;
 }
 
-export async function getIOC(options?: { debug?: boolean }): Promise<Container> {
+function isDebug(config: IOCConfig): boolean {
+  const loggerConfig = config.classes.find((conf) => conf.class === Logger);
+  return loggerConfig?.config?.level === 'debug';
+}
+
+export async function getIOC(): Promise<Container> {
   const config = await getConfig();
+  const debug = isDebug(config);
   const container = new Container({ skipBaseClassChecks: true });
   container.bind(IOCConfigSymbol).toConstantValue(config);
   container.bind(Container).toConstantValue(container);
   for (const classCfg of config.classes) {
     const className = classCfg.class.name;
-    if (options?.debug) {
+    if (debug) {
       // eslint-disable-next-line no-console
       console.debug('%s load class %s', new Date().toISOString(), className);
     }

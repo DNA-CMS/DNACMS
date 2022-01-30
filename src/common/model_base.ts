@@ -10,6 +10,7 @@ import { Container, injectable } from 'inversify';
 import mongoose from 'mongoose';
 import path from 'path';
 import { Base } from './base';
+import { BaseDoc, BaseRepo } from './base_types';
 
 type ClassType = new () => Object;
 type ModelMapping = { [name: string]: ClassType };
@@ -20,13 +21,15 @@ export interface ModelConfig {
   createIndexes: boolean;
   /** if secondary preferred for connection */
   secondaryPreferred: boolean;
+  /** automatically register all found schemas as models */
+  autoRegisterModels: boolean;
 }
 
 @injectable()
 export class ModelBase extends Base {
+  protected declare readonly config: ModelConfig;
   private mapping: ModelMapping = {};
   private inited = false;
-  protected declare readonly config: ModelConfig;
 
   constructor(ioc: Container) {
     super(ioc);
@@ -63,30 +66,7 @@ export class ModelBase extends Base {
         cls = desc.base;
         impl = desc.impl;
       }
-      const name = this.getClassName(cls);
-      if (name in this.mapping) {
-        throw new Error(`Class for '${name} can't be defined twice`);
-      }
-      this.mapping[name] = impl;
-    }
-  }
-
-  public isInitialized(): boolean {
-    return this.inited;
-  }
-
-  private bindModelClasses(): void {
-    for (const [name, cls] of Object.entries(this.mapping)) {
-      if (this.ioc.isBound(name)) {
-        continue;
-      }
-      this.ioc
-        .bind(name)
-        .toDynamicValue(() => {
-          this.logger.debug(`construct model for ${name}`);
-          return getModelForClass(cls);
-        })
-        .inSingletonScope();
+      this.registerSchemaClass(cls, impl);
     }
   }
 
@@ -94,7 +74,7 @@ export class ModelBase extends Base {
     if (this.inited) {
       throw new Error("Can't call model.init twice");
     }
-    this.bindModelClasses();
+    this.inited = true;
     const options: mongoose.ConnectOptions = {
       autoIndex: this.config.secondaryPreferred ? false : this.config.createIndexes
     };
@@ -104,24 +84,28 @@ export class ModelBase extends Base {
       options.readPreference = type;
     }
     await mongoose.connect(this.config.mongoUri, options);
-    this.finalizer.addFinalizer(this, this.close.bind(this));
-    const msg = `Initialize collections and ${this.config.syncIndexes ? 'sync' : 'create'} indexes`;
-    this.logger.info(msg);
+    this.finalizer.addFinalizer(this, () => this.close());
+    const msg = `Initialize collections${
+      this.config.syncIndexes || this.config.createIndexes
+        ? ` and ${this.config.syncIndexes ? 'sync' : 'create'} indexes`
+        : ''
+    }`;
+    this.logger.debug(msg);
     if (this.logger.debug()) {
       mongoose.set('debug', (col: string, func: string, ...args: any) =>
         this.mongoosePrintLog(col, func, args)
       );
     }
+    await Promise.all([this.bindRepos(), this.bindModels()]);
+    this.bindModelClasses();
     const promises = Object.keys(this.mapping).map(async (name) => {
       const model = this.ioc.get(name) as ReturnModelType<any>;
-      await initModel(model);
-      this.logger.debug(`initialized ${name}`);
+      await this.initModel(model);
+      this.logger.debug('The model %s was initialized', name);
       if (this.config.syncIndexes) {
         await model.syncIndexes();
       }
     });
-    promises.push(this.bindRepos());
-    promises.push(this.bindModels());
     try {
       await Promise.all(promises);
     } catch (e: any) {
@@ -130,8 +114,7 @@ export class ModelBase extends Base {
       }
       throw e;
     }
-    this.inited = true;
-    this.logger.info(`${msg}: finished`);
+    this.logger.debug(`${msg}: finished`);
   }
 
   public async close(): Promise<void> {
@@ -147,6 +130,21 @@ export class ModelBase extends Base {
       throw new Error(`Model for class '${model.name}' wasn't registered`);
     }
     return this.ioc.get(name);
+  }
+
+  private bindModelClasses(): void {
+    for (const [name, cls] of Object.entries(this.mapping)) {
+      if (this.ioc.isBound(name)) {
+        continue;
+      }
+      this.ioc
+        .bind(name)
+        .toDynamicValue(() => {
+          this.logger.debug('construct model for %s', name);
+          return getModelForClass(cls);
+        })
+        .inSingletonScope();
+    }
   }
 
   private getClassName(cls: ClassType): string {
@@ -166,13 +164,16 @@ export class ModelBase extends Base {
         continue;
       }
       this.logger.debug('Loading repo %s', repo);
-      const module: any = await import(repo);
-      const classNames = Object.keys(module).filter((name) => name.endsWith('Repo'));
-      if (classNames.length !== 1) {
-        throw new Error(`File ${repo} must contain exactly one repo class`);
+      const module = await import(repo);
+      const classes = Object.values(module).filter((cls: any) =>
+        Object.prototype.isPrototypeOf.call(BaseRepo, cls)
+      ) as ClassType[];
+      if (classes.length !== 1) {
+        throw new Error(`File ${repo} must contain exactly one repo class, not ${classes.length}`);
       }
-      assert(!this.ioc.isBound(module[classNames[0]]), `Repo ${classNames[0]} is already bound`);
-      this.ioc.bind(module[classNames[0]]).toSelf().inSingletonScope();
+      const cls = classes[0];
+      assert(!this.ioc.isBound(cls), `Repo ${cls.constructor.name} is already bound`);
+      this.ioc.bind(cls).toSelf().inSingletonScope();
     }
     this.logger.debug('Loading repos finished');
   }
@@ -190,36 +191,49 @@ export class ModelBase extends Base {
         continue;
       }
       this.logger.debug('Loading model %s', model);
-      const module: any = await import(model);
-      const classNames = Object.keys(module).filter((name) => name.endsWith('Doc'));
-      for (const cls of classNames) {
-        assert(!this.ioc.isBound(module[cls]), `Model ${cls} is already bound`);
-        this.ioc.bind(module[cls]).toSelf().inSingletonScope();
+      const module = await import(model);
+      const classes = Object.values(module).filter((cls: any) =>
+        Object.prototype.isPrototypeOf.call(BaseDoc, cls)
+      ) as ClassType[];
+      if (classes.length === 0) {
+        throw new Error(`File ${model} must contain at lest one doc class`);
+      }
+      for (const cls of classes) {
+        assert(!this.ioc.isBound(cls), `Model ${cls.constructor.name} is already bound`);
+        this.ioc.bind(cls).toSelf().inSingletonScope();
+        if (this.config.autoRegisterModels) {
+          this.registerSchemaClass(cls);
+        }
       }
     }
     this.logger.debug('Loading models finished');
   }
 
-  private mongoosePrintLog(col: string, func: string, args: any[]): void {
-    if (!args) {
-      args = [];
-    }
+  private mongoosePrintLog(col: string, func: string, args: any[] = []): void {
     this.logger.debug(`mongoose: ${col}.${func}(${args.map((a) => JSON.stringify(a)).join(', ')})`);
   }
-}
 
-function initModel(model: ReturnModelType<any>): Promise<void> {
-  return new Promise((resolve, reject) => {
-    model.on('index', (err: any) => {
-      if (!err) {
-        return;
-      }
-      reject(
-        new Error(
-          `Error while initialize collection '${model.collection.collectionName}': ${err.message}`
-        )
-      );
+  private initModel(model: ReturnModelType<any>): Promise<void> {
+    return new Promise((resolve, reject) => {
+      model.on('index', (err: any) => {
+        if (!err) {
+          return;
+        }
+        reject(
+          new Error(
+            `Error while initialize collection '${model.collection.collectionName}': ${err.message}`
+          )
+        );
+      });
+      model.init().then(resolve).catch(reject);
     });
-    model.init().then(resolve).catch(reject);
-  });
+  }
+
+  private registerSchemaClass(cls: ClassType, impl?: ClassType): void {
+    const name = this.getClassName(cls);
+    if (name in this.mapping) {
+      throw new Error(`Class for '${name} can't be defined twice`);
+    }
+    this.mapping[name] = impl ?? cls;
+  }
 }
